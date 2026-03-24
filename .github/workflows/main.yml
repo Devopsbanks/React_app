@@ -5,18 +5,69 @@ on:
     branches:
       - main
       - develop
+    paths:                        # ← Layer 1: sirf tab trigger ho jab in files mein change ho
+      - 'src/**'
+      - 'public/**'
+      - 'package.json'
+      - 'package-lock.json'
   pull_request:
     branches:
       - develop
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'package.json'
+      - 'package-lock.json'
 
 env:
   NEXUS_URL: http://20.235.80.53:8081
   NEXUS_REPO: react-artifacts
 
 jobs:
+  # ─── Layer 2: Git diff se check karo actual changes hain ya nahi ───
+  check-changes:
+    name: Check for changes
+    runs-on: self-hosted
+    outputs:
+      has_changes: ${{ steps.diff.outputs.has_changes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2            # last 2 commits chahiye diff ke liye
+
+      - name: Check git diff
+        id: diff
+        run: |
+          # [skip ci] commit se trigger hua? → skip karo
+          LAST_MSG=$(git log -1 --pretty=%B)
+          if echo "$LAST_MSG" | grep -q "\[skip ci\]"; then
+            echo "⏭️ [skip ci] commit detected — skipping build"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Actual app files mein koi change hai?
+          CHANGED=$(git diff --name-only HEAD~1 HEAD -- \
+            'src/' 'public/' 'package.json' 'package-lock.json' 2>/dev/null || \
+            git diff --name-only HEAD -- \
+            'src/' 'public/' 'package.json' 'package-lock.json')
+
+          if [ -z "$CHANGED" ]; then
+            echo "⏭️ No relevant changes found — skipping build"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Changes detected:"
+            echo "$CHANGED"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+  # ─── Build + Push (sirf tab jab changes hon) ────────────────────────
   build:
     name: Build Application
     runs-on: self-hosted
+    needs: check-changes
+    if: needs.check-changes.outputs.has_changes == 'true'
 
     permissions:
       contents: write
@@ -46,25 +97,22 @@ jobs:
       - name: Build application
         run: npm run build
 
-      # ─── Auto Version Bump ──────────────────────────────────────────
+      # ─── Auto Version Bump ────────────────────────────────────────
       - name: Bump version
         id: app_info
         run: |
           APP_NAME=$(node -p "require('./package.json').name")
           CURRENT_VERSION=$(node -p "require('./package.json').version")
 
-          # Semver split → 1.0.4 = MAJOR.MINOR.PATCH
           MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
           MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
           PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
 
-          # Patch +1
           NEW_PATCH=$((PATCH + 1))
           NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
 
           echo "🔢 Version: $CURRENT_VERSION → $NEW_VERSION"
 
-          # package.json update (macOS + Linux dono compatible)
           if [[ "$OSTYPE" == "darwin"* ]]; then
             sed -i '' "s/\"version\": \"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" package.json
           else
@@ -76,6 +124,7 @@ jobs:
           echo "app_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
       - name: Commit version bump
+        if: github.event_name != 'pull_request'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -83,7 +132,7 @@ jobs:
           git commit -m "ci: bump version to ${{ steps.app_info.outputs.app_version }} [skip ci]"
           git push
 
-      # ─── Package & Push to Nexus ────────────────────────────────────
+      # ─── Package & Push to Nexus ──────────────────────────────────
       - name: Package build
         id: package
         run: |
@@ -93,6 +142,7 @@ jobs:
           echo "✅ Packaged: $FILENAME"
 
       - name: Push to Nexus
+        if: github.event_name != 'pull_request'
         env:
           NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
@@ -119,7 +169,7 @@ jobs:
             exit 1
           fi
 
-      # ─── Summary ────────────────────────────────────────────────────
+      # ─── Summary ──────────────────────────────────────────────────
       - name: Job Summary
         run: |
           echo "## 🎉 React App Pushed to Nexus!" >> $GITHUB_STEP_SUMMARY
