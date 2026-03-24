@@ -17,9 +17,15 @@ jobs:
   build:
     name: Build Application
     runs-on: self-hosted
+
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -40,16 +46,44 @@ jobs:
       - name: Build application
         run: npm run build
 
-      # ─── Nexus Push ─────────────────────────────────────────────────
-      - name: Read app version
+      # ─── Auto Version Bump ──────────────────────────────────────────
+      - name: Bump version
         id: app_info
         run: |
           APP_NAME=$(node -p "require('./package.json').name")
-          APP_VERSION=$(node -p "require('./package.json').version")
-          echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
-          echo "app_version=$APP_VERSION" >> $GITHUB_OUTPUT
-          echo "📦 $APP_NAME — v$APP_VERSION"
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
 
+          # Semver split → 1.0.4 = MAJOR.MINOR.PATCH
+          MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
+          MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
+          PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
+
+          # Patch +1
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+
+          echo "🔢 Version: $CURRENT_VERSION → $NEW_VERSION"
+
+          # package.json update (macOS + Linux dono compatible)
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            sed -i '' "s/\"version\": \"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" package.json
+          else
+            sed -i "s/\"version\": \"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" package.json
+          fi
+
+          echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
+          echo "old_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "app_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json
+          git commit -m "ci: bump version to ${{ steps.app_info.outputs.app_version }} [skip ci]"
+          git push
+
+      # ─── Package & Push to Nexus ────────────────────────────────────
       - name: Package build
         id: package
         run: |
@@ -84,3 +118,16 @@ jobs:
             echo "❌ Push failed with HTTP $HTTP_STATUS"
             exit 1
           fi
+
+      # ─── Summary ────────────────────────────────────────────────────
+      - name: Job Summary
+        run: |
+          echo "## 🎉 React App Pushed to Nexus!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| App | \`${{ steps.app_info.outputs.app_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Old Version | \`${{ steps.app_info.outputs.old_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| New Version | \`${{ steps.app_info.outputs.app_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| File | \`${{ steps.package.outputs.filename }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Nexus URL | ${{ env.NEXUS_URL }}/repository/${{ env.NEXUS_REPO }}/ |" >> $GITHUB_STEP_SUMMARY
