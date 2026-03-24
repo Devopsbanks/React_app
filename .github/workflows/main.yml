@@ -1,5 +1,4 @@
 name: Application CI
-
 on:
   workflow_dispatch: 
   push:
@@ -9,38 +8,79 @@ on:
   pull_request:
     branches:
       - develop
-  
+
+env:
+  NEXUS_URL: http://20.235.80.53:8081
+  NEXUS_REPO: react-artifacts
+
 jobs:
   build:
     name: Build Application
     runs-on: self-hosted
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
-      
+        uses: actions/checkout@v4
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 16.x
-      
+
       - name: Cache node_modules
         id: cache
         uses: actions/cache@v4
         with:
           path: node_modules
           key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
-      
+
       - name: Install dependencies
         if: steps.cache.outputs.cache-hit != 'true'
         run: npm ci
 
-      - name: build application
+      - name: Build application
         run: npm run build
 
-      - name: Upload a Build Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          # Artifact name
-          name: frontend # optional, default is artifact
-          # A file, directory or wildcard pattern that describes what to upload
-          path: build/
+      # ─── Nexus Push ─────────────────────────────────────────────────
+      - name: Read app version
+        id: app_info
+        run: |
+          APP_NAME=$(node -p "require('./package.json').name")
+          APP_VERSION=$(node -p "require('./package.json').version")
+          echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
+          echo "app_version=$APP_VERSION" >> $GITHUB_OUTPUT
+          echo "📦 $APP_NAME — v$APP_VERSION"
+
+      - name: Package build
+        id: package
+        run: |
+          FILENAME="${{ steps.app_info.outputs.app_name }}-${{ steps.app_info.outputs.app_version }}.tar.gz"
+          tar -czf "$FILENAME" build/
+          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
+          echo "✅ Packaged: $FILENAME"
+
+      - name: Push to Nexus
+        env:
+          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          FILENAME=${{ steps.package.outputs.filename }}
+          APP_NAME=${{ steps.app_info.outputs.app_name }}
+          VERSION=${{ steps.app_info.outputs.app_version }}
+
+          NEXUS_PATH="${{ env.NEXUS_URL }}/repository/${{ env.NEXUS_REPO }}/${APP_NAME}/${VERSION}/${FILENAME}"
+
+          echo "🚀 Pushing to: $NEXUS_PATH"
+
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -u "$NEXUS_USER:$NEXUS_PASS" \
+            --upload-file "$FILENAME" \
+            "$NEXUS_PATH")
+
+          echo "HTTP Status: $HTTP_STATUS"
+
+          if [[ "$HTTP_STATUS" == "200" || "$HTTP_STATUS" == "201" ]]; then
+            echo "✅ Successfully pushed to Nexus!"
+          else
+            echo "❌ Push failed with HTTP $HTTP_STATUS"
+            exit 1
+          fi
