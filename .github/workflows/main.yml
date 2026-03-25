@@ -1,15 +1,35 @@
-name: Application CI
+name: Application Build CI
 
-on: 
- workflow_dispatch: 
- push: 
-  branches: 
-   - main  
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-   build: 
-    runs-on: Hemants-laptop
+  build:
     name: Application Build CI
+    runs-on: Hemants-laptop   # self-hosted runner label
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6.0.2
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 16.x
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Build Application
+        run: npm run build
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: React-App-${{ github.run_id }}
+          path: build/
+               
+                 
