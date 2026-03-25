@@ -6,31 +6,51 @@ on:
     branches:
       - main
 
+# ✅ Prevent multiple queued runs
+concurrency:
+  group: react-app-ci
+  cancel-in-progress: true
+
+# ✅ Least-privilege security
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Application Build CI
     runs-on: self-hosted
-     
 
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
 
+      # ✅ Faster builds with npm cache
       - name: Setup Node.js environment
         uses: actions/setup-node@v4
         with:
           node-version: 18.x
+          cache: npm
 
+      # ✅ Stable installs (ci if lock file exists)
       - name: Install Dependencies
-        run: npm install
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      # ✅ Security visibility (non-blocking)
+      - name: Security audit (non-blocking)
+        run: npm audit || true
 
       - name: Build Application
         run: npm run build
 
+      # ✅ Control artifact retention
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: React-App-${{ github.run_id }}
           path: build/
-               
-                 
+          retention-days: 7                 
