@@ -9,9 +9,8 @@ on:
 jobs:
   build:
     name: Application Build CI
-    runs-on: 
-      - self-hosted
-      - Hemants-Laptop   # self-hosted runner label
+    runs-on: self-hosted
+     
 
     steps:
       - name: Checkout source code
