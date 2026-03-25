@@ -11,7 +11,7 @@ jobs:
     name: Application Build CI
     runs-on: 
       - self-hosted
-      - Hemants-laptop   # self-hosted runner label
+      - Hemants-Laptop   # self-hosted runner label
 
     steps:
       - name: Checkout source code
